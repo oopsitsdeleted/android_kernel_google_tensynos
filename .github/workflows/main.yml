@@ -1,0 +1,68 @@
+name: Build Sultan A16 + SukiSU + SuSFS
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+
+      - name: Sync Sultan Source (16.0.0-sultan)
+        run: |
+          mkdir kernel && cd kernel
+          repo init -u https://github.com/kerneltoast/android_kernel_google_tensynos -b 16.0.0-sultan --depth=1
+          repo sync -j$(nproc)
+
+      - name: Integrate SukiSU
+        run: |
+          cd kernel
+          # Standard GKI hook for SukiSU
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+
+      - name: Integrate SuSFS (Manual Steps)
+        run: |
+          cd kernel
+          git clone https://github.com/simonpunk/susfs4ksu -b gki-android14-6.1
+          
+          # 1. Copy mandatory SuSFS source files
+          cp susfs4ksu/kernel_patches/fs/susfs.c common/fs/
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h common/include/linux/
+
+          # 2. Patch SukiSU to support SuSFS hooks
+          cd KernelSU
+          patch -p1 < ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          
+          # 3. Patch the main kernel tree
+          cd ../common
+          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-6.1.patch
+          
+          # 4. Remove ABI protection (prevents WiFi/Bluetooth breakage)
+          rm -f android/abi_gki_protected_exports_aarch64
+
+      - name: Set Configs
+        run: |
+          # Ensure both SukiSU and SuSFS features are enabled in Sultan's config
+          CONF="kernel/private/devices/google/caimito/caimito_defconfig"
+          echo "CONFIG_KSU=y" >> $CONF
+          echo "CONFIG_KSU_SUSFS=y" >> $CONF
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $CONF
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $CONF
+
+      - name: Build with Kleaf
+        run: |
+          cd kernel
+          # LTO=thin is vital for GitHub Action RAM limits
+          LTO=thin BUILD_AOSP_KERNEL=1 ./build_caimito.sh
+
+      - name: Upload init_boot
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sultan-SukiSU-SuSFS-Komodo
+          path: kernel/out/caimito/dist/init_boot.img
