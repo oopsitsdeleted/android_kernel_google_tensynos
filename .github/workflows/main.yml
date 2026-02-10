@@ -1,10 +1,20 @@
-name: Build Sultan A16 + SukiSU + SuSFS
+name: Build Sultan Kernel SukiSU-SuSFS (Pixel 9 Pro XL)
+
+permissions:
+  contents: write
+  actions: write
+
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      CODENAME: "caimito" # Target for Pixel 9/Pro/XL
+      REPO_URL: "https://github.com/kerneltoast/android_kernel_google_tensynos"
+      BRANCH: "16.0.0-sultan"
+    
     steps:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
@@ -13,64 +23,88 @@ jobs:
           temp-reserve-mb: 2048
           remove-dotnet: 'true'
           remove-android: 'true'
+          remove-haskell: 'true'
 
-      - name: Install Repo Tool
+      - name: Install Dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y repo python3 git curl bc bison flex libssl-dev make zip
           mkdir -p ~/bin
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
           chmod a+x ~/bin/repo
-          # Add to PATH so the runner can find it
           echo "$HOME/bin" >> $GITHUB_PATH
+          git config --global user.email "bot@example.com"
+          git config --global user.name "Sultan-Builder"
 
       - name: Sync Sultan Kernel Source
         run: |
           mkdir kernel && cd kernel
-          repo init -u https://github.com/kerneltoast/android_kernel_google_tensynos -b 16.0.0-sultan --depth=1
+          repo init -u ${{ env.REPO_URL }} -b ${{ env.BRANCH }} --depth=1
           repo sync -j$(nproc)
 
-      - name: Integrate SukiSU
+      - name: Setup AnyKernel3 & SuSFS
+        run: |
+          # Use gki-android14-6.1 as it matches the kernel base for Pixel 9
+          git clone https://github.com/simonpunk/susfs4ksu -b gki-android14-6.1
+          git clone https://github.com/TheWildJames/AnyKernel3 -b sultan-gs201 # GS201 branch is compatible with Tensor structure
+
+      - name: Integrate SukiSU-Ultra
         run: |
           cd kernel
-          # Standard GKI hook for SukiSU
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
-      - name: Integrate SuSFS (Manual Steps)
+      - name: Apply SuSFS Patches
         run: |
           cd kernel
-          git clone https://github.com/simonpunk/susfs4ksu -b gki-android14-6.1
-          
-          # 1. Copy mandatory SuSFS source files
-          cp susfs4ksu/kernel_patches/fs/susfs.c common/fs/
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h common/include/linux/
-
-          # 2. Patch SukiSU to support SuSFS hooks
+          # 1. Patch SukiSU-Ultra for SuSFS
           cd KernelSU
-          patch -p1 < ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          patch -p1 < ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
           
-          # 3. Patch the main kernel tree
+          # 2. Patch Common Kernel tree
           cd ../common
-          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-6.1.patch
+          patch -p1 < ../../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-6.1.patch
+          cp ../../susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           
-          # 4. Remove ABI protection (prevents WiFi/Bluetooth breakage)
+          # 3. Fix ABI mismatch for Android 16 (prevents Wi-Fi/BT break)
           rm -f android/abi_gki_protected_exports_aarch64
 
-      - name: Set Configs
+      - name: Configure Defconfig
         run: |
-          # Ensure both SukiSU and SuSFS features are enabled in Sultan's config
-          CONF="kernel/private/devices/google/caimito/caimito_defconfig"
-          echo "CONFIG_KSU=y" >> $CONF
-          echo "CONFIG_KSU_SUSFS=y" >> $CONF
-          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $CONF
-          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $CONF
+          DEFCONFIG="kernel/private/devices/google/caimito/caimito_defconfig"
+          {
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_KSU_SUSFS=y"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+          } >> $DEFCONFIG
 
-      - name: Build with Kleaf
+      - name: Build with Kleaf (Bazel)
         run: |
           cd kernel
-          # LTO=thin is vital for GitHub Action RAM limits
+          # LTO=thin is required to stay within GitHub Runner RAM limits
           LTO=thin BUILD_AOSP_KERNEL=1 ./build_caimito.sh
 
-      - name: Upload init_boot
-        uses: actions/upload-artifact@v4
+      - name: Package AnyKernel3
+        run: |
+          # Copy built init_boot.img (contains the kernel and ramdisk)
+          cp kernel/out/caimito/dist/init_boot.img AnyKernel3/
+          cd AnyKernel3
+          zip -r ../Sultan-A16-Komodo-SukiSU-SuSFS.zip ./*
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
         with:
-          name: Sultan-SukiSU-SuSFS-Komodo
-          path: kernel/out/caimito/dist/init_boot.img
+          tag_name: sultan-komodo-${{ github.run_id }}
+          name: Sultan Kernel A16 + SukiSU + SuSFS (Pixel 9 Pro XL)
+          body: |
+            Build Date: ${{ github.event.head_commit.timestamp }}
+            Kernel: Sultan Android 16 Branch
+            Features:
+            - SukiSU-Ultra
+            - SuSFS v2.0.0
+            - AnyKernel3 Flashable Zip
+          files: Sultan-A16-Komodo-SukiSU-SuSFS.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
