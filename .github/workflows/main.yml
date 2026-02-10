@@ -14,7 +14,15 @@ jobs:
           remove-dotnet: 'true'
           remove-android: 'true'
 
-      - name: Sync Sultan Source (16.0.0-sultan)
+      - name: Install Repo Tool
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          # Add to PATH so the runner can find it
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Sync Sultan Kernel Source
         run: |
           mkdir kernel && cd kernel
           repo init -u https://github.com/kerneltoast/android_kernel_google_tensynos -b 16.0.0-sultan --depth=1
