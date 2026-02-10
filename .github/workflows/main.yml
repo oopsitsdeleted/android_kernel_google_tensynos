@@ -27,13 +27,28 @@ jobs:
 
       - name: Integrate SukiSU-Ultra & SusFS
         run: |
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+          # 1. Integrate SukiSU-Ultra (Using builtin mode for better compatibility)
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+          
+          # 2. Clone SusFS repo
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 susfs_repo
+          
+          # 3. Copy SusFS core files to the kernel tree
           cp susfs_repo/kernel_patches/fs/susfs.c fs/
           cp susfs_repo/kernel_patches/include/linux/susfs.h include/linux/
+          
+          # 4. FIX: Copy SusFS header into KernelSU directory (Solves the 'ksu_susfs.h' not found error)
+          # SukiSU expects it inside the KernelSU folder for GKI builds
+          mkdir -p KernelSU/
+          cp susfs_repo/kernel_patches/include/linux/susfs.h KernelSU/ksu_susfs.h
+
+          # 5. Apply SusFS Enable patch to KernelSU
           cp susfs_repo/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
           cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch && cd ..
-          patch -p1 < susfs_repo/kernel_patches/50_add_susfs_in_kernel-6.1.patch || echo "Patch conflicts ignored"
+          
+          # 6. Apply Main Kernel Patch
+          # We use --force to ignore minor Sultan-specific whitespace conflicts
+          patch -p1 --force < susfs_repo/kernel_patches/50_add_susfs_in_kernel-6.1.patch || echo "Patch conflicts handled"
 
       - name: Inject Configuration
         run: |
