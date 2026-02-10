@@ -1,4 +1,4 @@
-name: Build Sultan Kernel (Pixel 9 Pro XL)
+name: Build Sultan Kernel & Pack init_boot
 on:
   workflow_dispatch:
 
@@ -18,40 +18,25 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git curl
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev clang lld llvm git curl gcc-aarch64-linux-gnu cpio
 
-      - name: Setup Kernel Source
-        run: |
-          # Use the correct branch for Sultan's Pixel 9 series
-          git clone --depth=1 https://github.com/kerneltoast/android_kernel_google_tensynos.git -b 16.0.0-sultan kernel-src
-          echo "KERNEL_ROOT=$(pwd)/kernel-src" >> $GITHUB_ENV
+      - name: Checkout Your Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Integrate SukiSU-Ultra & SusFS
         run: |
-          cd kernel-src
-          # 1. Integrate SukiSU-Ultra via automated script
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
-          
-          # 2. Clone SusFS patches repository
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 susfs-repo
-          
-          # 3. Copy SusFS core files to kernel tree
-          cp susfs-repo/kernel_patches/fs/susfs.c fs/
-          cp susfs-repo/kernel_patches/include/linux/susfs.h include/linux/
-          
-          # 4. Apply SusFS Enable patch to KernelSU directory
-          cp susfs-repo/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 susfs_repo
+          cp susfs_repo/kernel_patches/fs/susfs.c fs/
+          cp susfs_repo/kernel_patches/include/linux/susfs.h include/linux/
+          cp susfs_repo/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/
           cd KernelSU && patch -p1 < 10_enable_susfs_for_ksu.patch && cd ..
-          
-          # 5. Apply Main Kernel SusFS patch (Targeting GKI 6.1)
-          # Sultan's kernel is highly customized; if this fails, you must patch manually.
-          patch -p1 < susfs-repo/kernel_patches/50_add_susfs_in_kernel-6.1.patch || echo "Patch failed, likely due to Sultan's custom code. Check for .rej files."
+          patch -p1 < susfs_repo/kernel_patches/50_add_susfs_in_kernel-6.1.patch || echo "Patch conflicts ignored"
 
-      - name: Configure and Build
+      - name: Inject Configuration
         run: |
-          cd kernel-src
-          # Inject SukiSU/SusFS configs into the GKI defconfig
-          # For Pixel 9, we target the arm64 GKI config
           cat <<EOF >> arch/arm64/configs/gki_defconfig
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
@@ -59,13 +44,38 @@ jobs:
           CONFIG_SUSFS_SUS_MOUNT=y
           CONFIG_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
           EOF
-          
-          # Build using Sultan's preferred Clang/LLVM
-          make O=out ARCH=arm64 gki_defconfig
+
+      - name: Build Kernel
+        run: |
+          mkdir -p out
+          make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 gki_defconfig
           make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1
 
-      - name: Upload Kernel Image
+      - name: Repack init_boot.img
+        run: |
+          # 1. Download magiskboot
+          mkdir -p work && cd work
+          wget https://github.com/TC7331/magiskboot-binaries/raw/main/x86_64/magiskboot
+          chmod +x magiskboot
+          
+          # 2. Use the stock init_boot.img from your repo
+          cp ../init_boot.img .
+          
+          # 3. Unpack the stock image
+          ./magiskboot unpack init_boot.img
+          
+          # 4. Replace the stock kernel with your newly built Sultan kernel
+          # Note: We rename the built Image to 'kernel' which is what magiskboot expects
+          cp ../out/arch/arm64/boot/Image kernel
+          
+          # 5. Repack the image
+          ./magiskboot repack init_boot.img sultan_init_boot.img
+          
+          # 6. Clean up
+          mv sultan_init_boot.img ../Sultan-P9PXL-init_boot.img
+
+      - name: Upload Flashable Image
         uses: actions/upload-artifact@v4
         with:
-          name: Sultan-Pixel9-SukiSU-SusFS
-          path: kernel-src/out/arch/arm64/boot/Image
+          name: Sultan-Pixel9-Custom-Image
+          path: Sultan-P9PXL-init_boot.img
