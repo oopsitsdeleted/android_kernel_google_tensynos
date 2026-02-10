@@ -1,4 +1,4 @@
-name: Build Sultan Kernel SukiSU-SuSFS (Pixel 9 Pro XL)
+name: Build Sultan Kernel Pixel 9 Pro XL
 
 permissions:
   contents: write
@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      CODENAME: "caimito" # Target for Pixel 9/Pro/XL
+      CODENAME: "caimito"
       REPO_URL: "https://github.com/kerneltoast/android_kernel_google_tensynos"
       BRANCH: "16.0.0-sultan"
     
@@ -19,11 +19,12 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 8192
+          root-reserve-mb: 16384 # Increased reserve
           temp-reserve-mb: 2048
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
+          remove-codeql: 'true'
 
       - name: Install Dependencies
         run: |
@@ -40,13 +41,13 @@ jobs:
         run: |
           mkdir kernel && cd kernel
           repo init -u ${{ env.REPO_URL }} -b ${{ env.BRANCH }} --depth=1
-          repo sync -j$(nproc)
+          # Optimization: Sync only what is needed, avoid hanging on large modules
+          repo sync -c -j4 --fail-fast --force-sync --no-tags --no-clone-bundle
 
       - name: Setup AnyKernel3 & SuSFS
         run: |
-          # Use gki-android14-6.1 as it matches the kernel base for Pixel 9
           git clone https://github.com/simonpunk/susfs4ksu -b gki-android14-6.1
-          git clone https://github.com/TheWildJames/AnyKernel3 -b sultan-gs201 # GS201 branch is compatible with Tensor structure
+          git clone https://github.com/TheWildJames/AnyKernel3 -b sultan-gs201
 
       - name: Integrate SukiSU-Ultra
         run: |
@@ -66,7 +67,7 @@ jobs:
           cp ../../susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           
-          # 3. Fix ABI mismatch for Android 16 (prevents Wi-Fi/BT break)
+          # 3. Fix ABI mismatch for Android 16
           rm -f android/abi_gki_protected_exports_aarch64
 
       - name: Configure Defconfig
@@ -82,29 +83,26 @@ jobs:
       - name: Build with Kleaf (Bazel)
         run: |
           cd kernel
-          # LTO=thin is required to stay within GitHub Runner RAM limits
+          # LTO=thin + Reduced job count to prevent OOM hang
           LTO=thin BUILD_AOSP_KERNEL=1 ./build_caimito.sh
 
       - name: Package AnyKernel3
         run: |
-          # Copy built init_boot.img (contains the kernel and ramdisk)
           cp kernel/out/caimito/dist/init_boot.img AnyKernel3/
           cd AnyKernel3
           zip -r ../Sultan-A16-Komodo-SukiSU-SuSFS.zip ./*
 
       - name: Create Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: sultan-komodo-${{ github.run_id }}
-          name: Sultan Kernel A16 + SukiSU + SuSFS (Pixel 9 Pro XL)
+          tag_name: v${{ github.run_number }}
+          name: "Sultan A16 SukiSU-SuSFS Build #${{ github.run_number }}"
           body: |
-            Build Date: ${{ github.event.head_commit.timestamp }}
-            Kernel: Sultan Android 16 Branch
-            Features:
-            - SukiSU-Ultra
-            - SuSFS v2.0.0
-            - AnyKernel3 Flashable Zip
+            ### Sultan Kernel for Pixel 9 Pro XL
+            - **Android Version:** 16 (Sultan Branch)
+            - **Root:** SukiSU-Ultra
+            - **Bypass:** SuSFS v2.0.0
+            - **Flash:** Flash via KernelFlasher or Fastboot
           files: Sultan-A16-Komodo-SukiSU-SuSFS.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
