@@ -27,39 +27,40 @@ jobs:
 
       - name: Integrate SukiSU-Ultra & SusFS
         run: |
-          # 1. Setup SukiSU-Ultra (Manual Integration to avoid script conflicts)
+          # 1. Setup SukiSU-Ultra
           git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
-          # Move the KernelSU source to the root where Sultan's build expects it
+          # SukiSU-Ultra's kernel source is in the 'kernel' folder of their repo
+          # We move it to 'KernelSU' in our project root
           cp -r SukiSU-Ultra/kernel KernelSU
           
           # 2. Setup SusFS
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android14-6.1 susfs_repo
           
-          # 3. Copy SusFS Core Files
+          # 3. Copy SusFS Core Files to Kernel Source
           cp susfs_repo/kernel_patches/fs/susfs.c fs/
           cp susfs_repo/kernel_patches/include/linux/susfs.h include/linux/
           
-          # 4. FIX: The "ksu_susfs.h" problem
-          # SukiSU-Ultra core looks for ksu_susfs.h in its own folder
+          # 4. FIX: Align SusFS with SukiSU Structure
+          # We need ksu_susfs.h inside KernelSU for SukiSU-Ultra to compile
           cp susfs_repo/kernel_patches/include/linux/susfs.h KernelSU/ksu_susfs.h
           
-          # 5. Apply the SusFS-KSU Bridge
-          # We use -f to force it and ignore "already patched" errors
+          # 5. Apply the SusFS-KSU Bridge Patch
+          # We use -p2 because the patch thinks files are in 'kernel/' 
+          # but we are already inside the 'KernelSU' directory
           cd KernelSU
-          patch -p1 --forward < ../susfs_repo/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || echo "Bridge patch skipped"
+          patch -p2 --forward < ../susfs_repo/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || echo "Bridge patch skipped"
           cd ..
 
-          # 6. Apply Main Kernel SusFS Patches
-          # We manually apply the patches to the specific files Sultan uses
-          # This bypasses the "Hunk Failed" errors by targeting the files directly
-          patch -p1 < susfs_repo/kernel_patches/50_add_susfs_in_kernel-6.1.patch || echo "Main patch had conflicts, forcing manual header injection..."
+          # 6. Apply Main Kernel SusFS Patch
+          # We ensure the path to the patch file is absolute/correct
+          patch -p1 --forward < ./susfs_repo/kernel_patches/50_add_susfs_in_kernel-6.1.patch || echo "Main patch conflicts ignored"
           
-          # 7. Manual Header Injection (The fail-safe)
-          # If the patches above failed, this ensures the kernel at least knows SusFS exists
-          sed -i '/#include <linux\/sched.h>/a #include <linux/susfs.h>' fs/open.c
-          sed -i '/#include <linux\/sched.h>/a #include <linux/susfs.h>' fs/stat.c
+          # 7. Manual Header Injection (Sultan-Specific Fail-safe)
+          # Sultan's kernel often rejects patches to open.c and stat.c due to custom optimizations
+          grep -q "linux/susfs.h" fs/open.c || sed -i '/#include <linux\/sched.h>/a #include <linux/susfs.h>' fs/open.c
+          grep -q "linux/susfs.h" fs/stat.c || sed -i '/#include <linux\/sched.h>/a #include <linux/susfs.h>' fs/stat.c
           
-          # 8. Hook SukiSU into the Build System
+          # 8. Hook into Build System
           echo "obj-y += KernelSU/" >> Makefile
           echo "source \"KernelSU/Kconfig\"" >> Kconfig
       - name: Inject Configuration
