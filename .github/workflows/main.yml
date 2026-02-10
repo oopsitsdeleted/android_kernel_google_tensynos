@@ -63,15 +63,11 @@ jobs:
           # 8. Hook into Build System
           echo "obj-y += KernelSU/" >> Makefile
           echo "source \"KernelSU/Kconfig\"" >> Kconfig
-      - name: Inject Configuration
+
+      - name: Print patch rejects
         run: |
-          cat <<EOF >> arch/arm64/configs/gki_defconfig
-          CONFIG_KSU=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_SUSFS_SUS_PATH=y
-          CONFIG_SUSFS_SUS_MOUNT=y
-          CONFIG_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          EOF
+          cat kernel/supercalls.c.rej || true
+          cat kernel/sucompat.c.rej || true
 
       - name: Build Kernel
         run: |
