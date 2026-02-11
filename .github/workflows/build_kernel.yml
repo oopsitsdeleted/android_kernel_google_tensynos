@@ -1,297 +1,103 @@
-name: Build Sultan Kernel with SukiSU for Pixel 9 Pro XL
+name: Sultan-SukiSU-Integrated
+permissions:
+  contents: write
+  actions: write
 
 on:
   workflow_dispatch:
     inputs:
-      hook_method:
-        description: 'Hook method to use'
+      codename:
+        description: 'Device Codename (e.g., zumapro)'
         required: true
-        default: 'kprobe'
-        type: choice
-        options:
-          - kprobe
-          - manual
-          - tracepoint
-      sukisu_branch:
-        description: 'SukiSU branch (main/test/nongki/susfs-main/susfs-test)'
+        default: 'zumapro'
+      android_version:
+        description: 'Android Version'
         required: true
-        default: 'main'
-        type: string
-      build_variant:
-        description: 'Build variant'
+        default: '16'
+      kernel_version:
+        description: 'Kernel Version'
         required: true
-        default: 'user'
-        type: choice
-        options:
-          - user
-          - userdebug
-          - eng
-  push:
-    branches:
-      - main
-      - 16.0.0-sultan
-    paths:
-      - '.github/workflows/build-sukisu-sultan.yml'
+        default: '6.1'
 
 jobs:
-  build:
-    name: Build Kernel with SukiSU
+  build-kernel:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout Sultan Kernel Source
+      - name: Checkout Forked Kernel Source
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          # This pulls the code from the repo where the workflow is running
           fetch-depth: 0
-      
-      - name: Set up environment
+
+      - name: Download GCC 14.2.0 Toolchain
         run: |
-          echo "BUILD_DATE=$(date +%Y%m%d-%H%M)" >> $GITHUB_ENV
-          echo "KERNEL_VERSION=16.0.0-sultan-sukisu" >> $GITHUB_ENV
-          
-      - name: Install dependencies
+          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
+          tar -xf x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
+          echo "TOOLCHAIN_PATH=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin" >> $GITHUB_ENV
+
+      - name: Clone AnyKernel3
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            bc \
-            bison \
-            build-essential \
-            ccache \
-            curl \
-            flex \
-            g++-multilib \
-            gcc-multilib \
-            git \
-            gnupg \
-            gperf \
-            imagemagick \
-            lib32readline-dev \
-            lib32z1-dev \
-            liblz4-tool \
-            libncurses-dev \
-            libncurses6 \
-            libssl-dev \
-            libxml2 \
-            libxml2-utils \
-            lzop \
-            pngcrush \
-            rsync \
-            schedtool \
-            squashfs-tools \
-            xsltproc \
-            zip \
-            zlib1g-dev \
-            python3 \
-            python-is-python3 \
-            libelf-dev \
-            kmod \
-            cpio \
-            wget \
-            ca-certificates
-      
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: sultan-kernel-pixel9-sukisu
-          max-size: 8G
-      
-      - name: Download and setup Clang toolchain
+          # Matches Sultan's AnyKernel3 branch for your device
+          git clone https://github.com/TheWildJames/AnyKernel3.git -b sultan-${{ github.event.inputs.codename }} AnyKernel3
+
+      - name: Integrate SukiSU (with Built-in SUSFS)
         run: |
-          mkdir -p ~/toolchains
-          cd ~/toolchains
-          
-          # Download Neutron Clang - newer Clang 19+ compatible with Ubuntu 24.04
-          # Neutron supports the latest glibc with .relr.dyn sections
-          git clone --depth=1 https://gitlab.com/dakkshesh07/neutron-clang.git clang
-          
-          # Set up paths
-          echo "CLANG_PATH=$HOME/toolchains/clang/bin" >> $GITHUB_ENV
-          echo "$HOME/toolchains/clang/bin" >> $GITHUB_PATH
-          
-          # Verify tools are available
-          ls -la $HOME/toolchains/clang/bin/ | grep -E "(clang|lld|llvm)" | head -10
-          
-      - name: Download GCC cross-compiler toolchains
+          echo "Running SukiSU-Ultra setup with SUSFS support..."
+          # The 'susfs-main' argument tells the script to handle SUSFS patching automatically
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+
+      - name: Configure Defconfig
         run: |
-          cd ~/toolchains
+          DEFCONFIG="arch/arm64/configs/${{ github.event.inputs.codename }}_defconfig"
           
-          # Download ARM64 GCC toolchain
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 gcc-aarch64
+          echo "Enabling SukiSU and SUSFS configurations..."
+          {
+            echo "CONFIG_KSU=y"
+            echo "CONFIG_KSU_SUSFS=y"
+            echo "CONFIG_SUSFS=y"
+            echo "CONFIG_TMPFS_XATTR=y"
+            echo "CONFIG_TMPFS_POSIX_ACL=y"
+            echo "CONFIG_IP_NF_TARGET_TTL=y"
+            echo "CONFIG_TCP_CONG_BBR=y"
+            echo "CONFIG_NET_SCH_FQ=y"
+          } >> $DEFCONFIG
           
-          # Download ARM32 GCC toolchain (for compat builds)
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 gcc-arm
-          
-          # Add to PATH
-          echo "$HOME/toolchains/gcc-aarch64/bin" >> $GITHUB_PATH
-          echo "$HOME/toolchains/gcc-arm/bin" >> $GITHUB_PATH
-      
-      - name: Integrate SukiSU into kernel source
+          # Update Localversion for identification
+          sed -i 's/CONFIG_LOCALVERSION="-Sultan"/CONFIG_LOCALVERSION="-Sultan-SukiSU"/' $DEFCONFIG
+
+      - name: Build the Kernel
         run: |
-          cd $GITHUB_WORKSPACE
+          export PATH=$TOOLCHAIN_PATH:$PATH
           
-          # Determine the setup command based on branch input
-          SUKISU_BRANCH="${{ github.event.inputs.sukisu_branch || 'main' }}"
+          # Clean build environment
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux- CC=aarch64-linux-gcc -j$(nproc --all) clean
           
-          echo "Integrating SukiSU with branch: $SUKISU_BRANCH"
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s $SUKISU_BRANCH
-          
-      - name: Configure kernel for SukiSU
+          # Generate config and build
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux- CC=aarch64-linux-gcc -j$(nproc --all) ${{ github.event.inputs.codename }}_defconfig
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux- CC=aarch64-linux-gcc -j$(nproc --all)
+
+      - name: Prepare AnyKernel3 Package
         run: |
-          cd $GITHUB_WORKSPACE
+          # Pixel 9 Pro XL (zumapro) build artifact location
+          cp arch/arm64/boot/Image.lz4 AnyKernel3/Image.lz4 || cp arch/arm64/boot/Image AnyKernel3/Image
           
-          HOOK_METHOD="${{ github.event.inputs.hook_method || 'kprobe' }}"
-          
-          # Enable KernelSU/SukiSU config
-          if [ -f "KernelSU/kernel/Kconfig" ]; then
-            echo "CONFIG_KSU=y" >> arch/arm64/configs/cloudripper_gki_defconfig
-          fi
-          
-          # Configure hook method
-          case "$HOOK_METHOD" in
-            kprobe)
-              echo "Configuring KPROBES hook method"
-              echo "CONFIG_KPROBES=y" >> arch/arm64/configs/cloudripper_gki_defconfig
-              echo "# CONFIG_KSU_MANUAL_HOOK is not set" >> arch/arm64/configs/cloudripper_gki_defconfig
-              echo "# CONFIG_KSU_TRACEPOINT_HOOK is not set" >> arch/arm64/configs/cloudripper_gki_defconfig
-              ;;
-            manual)
-              echo "Configuring manual hook method"
-              echo "CONFIG_KSU_MANUAL_HOOK=y" >> arch/arm64/configs/cloudripper_gki_defconfig
-              echo "# CONFIG_KSU_TRACEPOINT_HOOK is not set" >> arch/arm64/configs/cloudripper_gki_defconfig
-              ;;
-            tracepoint)
-              echo "Configuring tracepoint hook method"
-              echo "CONFIG_KSU_TRACEPOINT_HOOK=y" >> arch/arm64/configs/cloudripper_gki_defconfig
-              echo "# CONFIG_KSU_MANUAL_HOOK is not set" >> arch/arm64/configs/cloudripper_gki_defconfig
-              ;;
-          esac
-          
-      - name: Build kernel
-        run: |
-          cd $GITHUB_WORKSPACE
-          
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=$HOME/toolchains/gcc-aarch64/bin/aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=$HOME/toolchains/gcc-arm/bin/arm-linux-androideabi-
-          export CROSS_COMPILE_COMPAT=$HOME/toolchains/gcc-arm/bin/arm-linux-androideabi-
-          export PATH=$HOME/toolchains/clang/bin:$PATH
-          export CC=clang
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export READELF=llvm-readelf
-          export STRIP=llvm-strip
-          export LLVM=1
-          export LLVM_IAS=1
-          export USE_CCACHE=1
-          export CCACHE_EXEC=$(which ccache)
-          
-          # Verify clang is working
-          clang --version
-          ld.lld --version || echo "ld.lld not found in PATH"
-          which ld.lld || echo "ld.lld location unknown"
-          ls -la $HOME/toolchains/clang/bin/ | grep lld
-          
-          # Use cloudripper defconfig for Pixel 9 Pro XL
-          make O=out LLVM=1 LLVM_IAS=1 cloudripper_gki_defconfig
-          
-          # Build kernel
-          make -j$(nproc) O=out \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            ARCH=arm64 \
-            SUBARCH=arm64 \
-            CC=clang \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            CROSS_COMPILE=aarch64-linux-android- \
-            CROSS_COMPILE_ARM32=arm-linux-androideabi- \
-            CROSS_COMPILE_COMPAT=arm-linux-androideabi- \
-            Image.lz4 dtbo.img
-          
-      - name: Prepare artifacts
-        run: |
-          cd $GITHUB_WORKSPACE
-          mkdir -p artifacts
-          
-          # Copy kernel image
-          if [ -f "out/arch/arm64/boot/Image.lz4" ]; then
-            cp out/arch/arm64/boot/Image.lz4 artifacts/
-            echo "Kernel image copied successfully"
+          # DTB Concatenation for Tensor G4
+          if [ -d "out/google-devices/zumapro/dts" ]; then
+            cat out/google-devices/zumapro/dts/*.dtb > AnyKernel3/dtb
           else
-            echo "Error: Kernel image not found"
-            exit 1
+            # Fallback for standard kernel build paths
+            find . -name "*.dtb" -exec cat {} + > AnyKernel3/dtb || echo "No DTBs found"
           fi
-          
-          # Copy dtbo.img if exists
-          if [ -f "out/arch/arm64/boot/dtbo.img" ]; then
-            cp out/arch/arm64/boot/dtbo.img artifacts/
-          fi
-          
-          # Copy modules
-          find out -name "*.ko" -exec cp {} artifacts/ \;
-          
-          # Create build info
-          cat > artifacts/build-info.txt << EOF
-          Build Date: $(date)
-          Kernel Version: $KERNEL_VERSION
-          Device: Pixel 9 Pro XL (cloudripper)
-          SukiSU Branch: ${{ github.event.inputs.sukisu_branch || 'main' }}
-          Hook Method: ${{ github.event.inputs.hook_method || 'kprobe' }}
-          Build Variant: ${{ github.event.inputs.build_variant || 'user' }}
-          Commit: ${{ github.sha }}
-          EOF
-          
-      - name: Upload kernel artifacts
+
+      - name: Upload Kernel ZIP
+        run: |
+          cd AnyKernel3
+          ZIP_NAME="Sultan-SukiSU-${{ github.event.inputs.codename }}-A16.zip"
+          zip -r "../$ZIP_NAME" ./*
+          echo "ZIP_PATH=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sultan-sukisu-kernel-pixel9proxl-${{ env.BUILD_DATE }}
-          path: artifacts/
-          retention-days: 30
-          
-      - name: Create Release
-        if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: sultan-sukisu-${{ env.BUILD_DATE }}
-          name: Sultan Kernel with SukiSU - Pixel 9 Pro XL (${{ env.BUILD_DATE }})
-          body: |
-            ## Sultan Kernel with SukiSU Integration
-            
-            **Device:** Pixel 9 Pro XL (cloudripper)
-            **Kernel Version:** ${{ env.KERNEL_VERSION }}
-            **Build Date:** ${{ env.BUILD_DATE }}
-            **SukiSU Branch:** ${{ github.event.inputs.sukisu_branch || 'main' }}
-            **Hook Method:** ${{ github.event.inputs.hook_method || 'kprobe' }}
-            **Build Variant:** ${{ github.event.inputs.build_variant || 'user' }}
-            
-            ### Files Included
-            - `Image.lz4` - Kernel image
-            - `dtbo.img` - Device tree overlay image (if applicable)
-            - `*.ko` - Kernel modules
-            - `build-info.txt` - Build information
-            
-            ### Installation
-            1. Flash using a custom recovery or fastboot
-            2. Boot into the new kernel
-            3. Install SukiSU manager app
-            
-            ### Notes
-            - Make sure to backup your current boot image before flashing
-            - This is an unofficial build
-            
-            **Commit:** ${{ github.sha }}
-          files: artifacts/*
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: Sultan-SukiSU-${{ github.event.inputs.codename }}
+          path: ${{ env.ZIP_PATH }}
