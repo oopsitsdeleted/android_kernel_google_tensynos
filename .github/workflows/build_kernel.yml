@@ -1,4 +1,4 @@
-name: Build Sultan Kernel + SukiSU (Pixel 9 Pro XL - GCC 14.2)
+name: Build Sultan Kernel with SukiSU
 on:
   workflow_dispatch:
 
@@ -9,85 +9,61 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Install Build Dependencies
+      - name: Set up Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex git libssl-dev libelf-dev python3 cpio wget tar xz-utils libncurses5
+          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev binutils-dev \
+          python3-pip jq curl wget git lz4 zip
 
-      - name: Setup GCC 14.2 Toolchain
+      - name: Integrate SukiSU-Ultra
         run: |
-          mkdir -p toolchain
-          # Download official ARM GNU toolchain for AArch64
-          wget https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
-          tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchain --strip-components=1
-          
-          # Add to PATH immediately for subsequent steps
-          echo "$(pwd)/toolchain/bin" >> $GITHUB_PATH
-
-      - name: Integrate SukiSU
-        run: |
-          # Use SukiSU's setup script
+          # The SukiSU setup script runs in the root directory to modify the root Makefile
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
           
-          # Inject SukiSU and Kprobe configs into Sultan's defconfig
-          # For Sultan Tensor kernels, the defconfig is usually 'gki_defconfig' or 'sultan_defconfig'
-          # We will target gki_defconfig as it is the base for Pixel 9
-          CONF="arch/arm64/configs/gki_defconfig"
-          echo "CONFIG_KSU=y" >> $CONF
-          echo "CONFIG_KPROBES=y" >> $CONF
-          echo "CONFIG_KPROBE_EVENTS=y" >> $CONF
-          echo "CONFIG_OVERLAY_FS=y" >> $CONF
+          # Target the specific defconfig inside the device directory
+          DEFCONFIG="google-devices/zumapro/zumapro_defconfig"
           
-          # Force GCC LTO optimization flags
-          echo "CONFIG_LTO_GCC=y" >> $CONF
-          echo "CONFIG_ARCH_SUPPORTS_LTO_GCC=y" >> $CONF
+          if [ -f "$DEFCONFIG" ]; then
+            echo "CONFIG_KPROBES=y" >> "$DEFCONFIG"
+            echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG"
+            echo "# CONFIG_KSU_MANUAL_HOOK is not set" >> "$DEFCONFIG"
+          else
+            echo "ERROR: Could not find $DEFCONFIG"
+            exit 1
+          fi
 
-      - name: Build Kernel
+      - name: Build Kernel (ZumaPro)
         run: |
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-none-linux-gnu-
+          # Use the script at the specified path
+          chmod +x google-devices/zumapro/build_zumapro.sh
           
-          # Define LTO-aware toolchain components
-          export AR=aarch64-none-linux-gnu-gcc-ar
-          export NM=aarch64-none-linux-gnu-gcc-nm
-          export RANLIB=aarch64-none-linux-gnu-gcc-ranlib
-          export STRIP=aarch64-none-linux-gnu-strip
-          export OBJCOPY=aarch64-none-linux-gnu-objcopy
-          export OBJDUMP=aarch64-none-linux-gnu-objdump
+          # Execute the build. This script internally calls tools/bazel
+          ./google-devices/zumapro/build_zumapro.sh
 
-          # 1. Initialize configuration
-          make O=out gki_defconfig
-
-          # 2. Build the kernel (Pixel 9 Pro XL/komodo uses 'Image')
-          # We use -j$(nproc) to maximize the use of the GitHub runner's CPU
-          make -j$(nproc --all) O=out \
-                      ARCH=arm64 \
-                      CROSS_COMPILE=aarch64-none-linux-gnu- \
-                      AR=$AR \
-                      NM=$NM \
-                      RANLIB=$RANLIB \
-                      Image
-
-      - name: Package AnyKernel3
+      - name: Prepare AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
-          # Pixel 9 kernels are often inside 'out/arch/arm64/boot/Image'
-          if [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image AnyKernel3/
-          else
-            echo "Kernel Image not found! Build likely failed."
+          rm -rf AnyKernel3/.git* AnyKernel3/README.md
+          
+          # Find the compiled Image.lz4 artifact produced by the build process
+          IMAGE=$(find . -name "Image.lz4" | head -n 1)
+          
+          if [ -z "$IMAGE" ]; then
+            echo "Error: Image.lz4 not found. Verify build success."
             exit 1
           fi
           
-          cd AnyKernel3
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-          sed -i 's/device.name1=.*/device.name1=komodo/g' anykernel.sh
-          zip -r ../Sultan-SukiSU-Komodo-GCC14.zip *
+          cp "$IMAGE" AnyKernel3/
+          
+          # Configure AnyKernel3 for the Pixel 9 Pro XL (Komodo)
+          sed -i 's/device.name1=.*/device.name1=komodo/' AnyKernel3/anykernel.sh
+          
+          cd AnyKernel3 && zip -r9 ../Sultan-SukiSU-Komodo.zip *
 
-      - name: Upload Artifact
+      - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sultan-SukiSU-Kernel
-          path: Sultan-SukiSU-Komodo-GCC14.zip
+          name: Sultan-SukiSU-Kernel-Zip
+          path: Sultan-SukiSU-Komodo.zip
