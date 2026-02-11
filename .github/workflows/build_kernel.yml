@@ -1,0 +1,68 @@
+name: Build Sultan Kernel with SukiSU
+on:
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Sultan Kernel
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential flex bison binfmt-support libssl-dev libelf-dev python3
+          
+      - name: Integrate SukiSU
+        run: |
+          # Using the main branch for GKI as per SukiSU instructions
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+
+      - name: Download Clang and Toolchain
+        run: |
+          mkdir -p toolchain
+          cd toolchain
+          # Download Android Clang (using a stable version compatible with Pixel 9/Kernel 6.1)
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz
+          mkdir clang && tar -xf clang-r487747c.tar.gz -C clang
+          # Download AOSP GCC (for libgcc)
+          git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b master --depth=1
+
+      - name: Build Kernel
+        run: |
+          # Set paths for the toolchain
+          export PATH=$(pwd)/toolchain/clang/bin:$(pwd)/toolchain/aarch64-linux-android-4.9/bin:$PATH
+          
+          # Pixel 9 Pro XL is a GKI device (6.1 kernel)
+          # We use the GKI defconfig and Sultan's customizations
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          
+          # 1. Clean build directory
+          make O=out ARCH=arm64 distclean
+          
+          # 2. Apply GKI Defconfig
+          make O=out ARCH=arm64 gki_defconfig
+          
+          # 3. Enable KPROBES for SukiSU (as per your instructions)
+          scripts/config --file out/.config --enable KPROBES
+          scripts/config --file out/.config --disable KSU_MANUAL_HOOK
+          
+          # 4. Compile (using -j$(nproc) for speed)
+          make -j$(nproc) O=out \
+            ARCH=arm64 \
+            CC=clang \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip
+
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sultan-SukiSU-Pixel9ProXL
+          path: out/arch/arm64/boot/Image
