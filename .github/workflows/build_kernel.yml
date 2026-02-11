@@ -101,8 +101,9 @@ jobs:
           mkdir -p ~/toolchains
           cd ~/toolchains
           
-          # Download Proton Clang - a well-maintained Clang toolchain for Android kernels
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          # Download Neutron Clang - newer Clang 19+ compatible with Ubuntu 24.04
+          # Neutron supports the latest glibc with .relr.dyn sections
+          git clone --depth=1 https://gitlab.com/dakkshesh07/neutron-clang.git clang
           
           # Set up paths
           echo "CLANG_PATH=$HOME/toolchains/clang/bin" >> $GITHUB_ENV
