@@ -1,4 +1,4 @@
-name: Build Sultan Kernel + SukiSU (GCC 14.2)
+name: Build Sultan Kernel + SukiSU (Pixel 9 Pro XL - GCC 14.2)
 on:
   workflow_dispatch:
 
@@ -6,7 +6,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Sultan Kernel
+      - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -14,60 +14,80 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex git libssl-dev libelf-dev python3 cpio wget tar xz-utils
+          sudo apt-get install -y bc bison build-essential flex git libssl-dev libelf-dev python3 cpio wget tar xz-utils libncurses5
 
-      - name: Download GCC 14.2 Toolchain
+      - name: Setup GCC 14.2 Toolchain
         run: |
           mkdir -p toolchain
-          # Fetching official ARM GNU toolchain (aarch64-none-linux-gnu)
+          # Download official ARM GNU toolchain for AArch64
           wget https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
           tar -xf arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz -C toolchain --strip-components=1
+          
+          # Add to PATH immediately for subsequent steps
+          echo "$(pwd)/toolchain/bin" >> $GITHUB_PATH
 
       - name: Integrate SukiSU
         run: |
-          # Integrate SukiSU source
+          # Use SukiSU's setup script
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
           
-          # Configure SukiSU & Kprobes
-          # Note: If Sultan uses a custom defconfig name, change 'gki_defconfig' below
-          DEFCONFIG="arch/arm64/configs/gki_defconfig"
-          echo "CONFIG_KSU=y" >> $DEFCONFIG
-          echo "CONFIG_KPROBES=y" >> $DEFCONFIG
-          echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
+          # Inject SukiSU and Kprobe configs into Sultan's defconfig
+          # For Sultan Tensor kernels, the defconfig is usually 'gki_defconfig' or 'sultan_defconfig'
+          # We will target gki_defconfig as it is the base for Pixel 9
+          CONF="arch/arm64/configs/gki_defconfig"
+          echo "CONFIG_KSU=y" >> $CONF
+          echo "CONFIG_KPROBES=y" >> $CONF
+          echo "CONFIG_KPROBE_EVENTS=y" >> $CONF
+          echo "CONFIG_OVERLAY_FS=y" >> $CONF
           
-          # Enable LTO (GCC specific)
-          echo "CONFIG_LTO_GCC=y" >> $DEFCONFIG
+          # Force GCC LTO optimization flags
+          echo "CONFIG_LTO_GCC=y" >> $CONF
+          echo "CONFIG_ARCH_SUPPORTS_LTO_GCC=y" >> $CONF
 
-      - name: Build Kernel with GCC 14.2 & LTO
+      - name: Build Kernel
         run: |
-          export PATH=$(pwd)/toolchain/bin:$PATH
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-none-linux-gnu-
           
-          # Sultan kernels usually handle the specific GCC/LTO optimizations in the Makefile, 
-          # but we ensure the environment is clean and pointed to our downloaded GCC.
-          make O=out gki_defconfig
-          
-          # Build the kernel image (Pixel 9 Pro XL typically uses Image.lz4)
-          make -j$(nproc --all) O=out \
-                      CROSS_COMPILE=aarch64-none-linux-gnu- \
-                      AR=aarch64-none-linux-gnu-gcc-ar \
-                      NM=aarch64-none-linux-gnu-gcc-nm \
-                      RANLIB=aarch64-none-linux-gnu-gcc-ranlib \
-                      Image.lz4
+          # Define LTO-aware toolchain components
+          export AR=aarch64-none-linux-gnu-gcc-ar
+          export NM=aarch64-none-linux-gnu-gcc-nm
+          export RANLIB=aarch64-none-linux-gnu-gcc-ranlib
+          export STRIP=aarch64-none-linux-gnu-strip
+          export OBJCOPY=aarch64-none-linux-gnu-objcopy
+          export OBJDUMP=aarch64-none-linux-gnu-objdump
 
-      - name: Package with AnyKernel3
+          # 1. Initialize configuration
+          make O=out gki_defconfig
+
+          # 2. Build the kernel (Pixel 9 Pro XL/komodo uses 'Image')
+          # We use -j$(nproc) to maximize the use of the GitHub runner's CPU
+          make -j$(nproc --all) O=out \
+                      ARCH=arm64 \
+                      CROSS_COMPILE=aarch64-none-linux-gnu- \
+                      AR=$AR \
+                      NM=$NM \
+                      RANLIB=$RANLIB \
+                      Image
+
+      - name: Package AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git
-          cp out/arch/arm64/boot/Image.lz4 AnyKernel3/
+          # Pixel 9 kernels are often inside 'out/arch/arm64/boot/Image'
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/
+          else
+            echo "Kernel Image not found! Build likely failed."
+            exit 1
+          fi
+          
           cd AnyKernel3
-          # Set device properties for Komodo (Pixel 9 Pro XL)
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           sed -i 's/device.name1=.*/device.name1=komodo/g' anykernel.sh
           zip -r ../Sultan-SukiSU-Komodo-GCC14.zip *
 
-      - name: Upload Kernel
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Sultan-SukiSU-GCC14-Komodo
+          name: Sultan-SukiSU-Kernel
           path: Sultan-SukiSU-Komodo-GCC14.zip
