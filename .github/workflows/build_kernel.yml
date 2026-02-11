@@ -1,79 +1,75 @@
-name: Build Sultan Kernel with SukiSU
+name: Build Pixel 9 Pro XL Kernel (SukiSU)
+
 on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-kernel:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Kernel Source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Checkout Kernel Source
+      uses: actions/checkout@v4
+      with:
+        path: kernel
 
-      - name: Set up Build Environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential flex bison libssl-dev libelf-dev binutils-dev \
-          python3-pip jq curl wget git lz4 zip apt-transport-https gnupg
+    - name: Setup Build Environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip
 
-      - name: Install Host Bazel
-        run: |
-          # Official Bazel installation as recommended by Kleaf docs
-          curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel-archive-keyring.gpg
-          sudo install -m 0755 bazel-archive-keyring.gpg /usr/share/keyrings/bazel-archive-keyring.gpg
-          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/bazel-archive-keyring.gpg] https://storage.googleapis.com/bazel-apt stable jdk1.8" | sudo tee /etc/apt/sources.list.d/bazel.list
-          sudo apt update && sudo apt install bazel -y
+    - name: Download Clang Toolchain
+      run: |
+        mkdir clang
+        cd clang
+        # Downloading a compatible Proton Clang (often used for Pixel kernels). 
+        # You can swap this for Google's prebuilt clang if preferred.
+        wget https://github.com/kdrag0n/proton-clang/releases/download/20230501/proton_clang-13.0-20230501.tar.zst
+        tar -I zstd -xf proton_clang-13.0-20230501.tar.zst
+        cd ..
 
-      - name: Integrate SukiSU-Ultra
-        run: |
-          # Apply SukiSU hooks to the source tree
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
-          
-          # Inject SukiSU-required configs into the ZumaPro defconfig fragment
-          DEFCONFIG="google-devices/zumapro/zumapro_defconfig"
-          if [ -f "$DEFCONFIG" ]; then
-            echo "CONFIG_KPROBES=y" >> "$DEFCONFIG"
-            echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG"
-            echo "# CONFIG_KSU_MANUAL_HOOK is not set" >> "$DEFCONFIG"
-          else
-            echo "ERROR: Defconfig not found at $DEFCONFIG"
-            exit 1
-          fi
+    - name: Integrate SukiSU
+      run: |
+        cd kernel
+        # Run the SukiSU setup script for GKI (main branch)
+        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+        
+        # Verify integration
+        ls -d drivers/kernelsu
 
-      - name: Build Kernel (Direct Kleaf Call)
-        run: |
-          # Option 1: Calling bazel directly as per Kleaf documentation.
-          # We use the targets found in your build_zumapro.sh but via host bazel.
-          bazel run --config=stamp --config=zumapro //private/devices/google/zumapro:dist
+    - name: Build Kernel
+      run: |
+        cd kernel
+        
+        # Set environment variables for the build
+        export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+        export ARCH=arm64
+        export SUBARCH=arm64
+        export CROSS_COMPILE=aarch64-linux-gnu-
+        export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+        export CC=clang
+        
+        # 1. Clean build
+        make mrproper
+        
+        # 2. Configure for Pixel 9 Pro XL (Zuma Pro)
+        # Using zumapro_defconfig as identified in your file list
+        make zumapro_defconfig
+        
+        # 3. Enable KernelSU in the config
+        # We append the config directly to .config to ensure it's enabled
+        echo "CONFIG_KSU=y" >> .config
+        # Ensure manual hook is disabled for GKI kprobe method
+        # sed -i '/CONFIG_KSU_MANUAL_HOOK/d' .config
+        
+        # Re-sync config
+        make olddefconfig
 
-      - name: Prepare AnyKernel3
-        run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git
-          rm -rf AnyKernel3/.git* AnyKernel3/README.md
-          
-          # Bazel places output in out/zumapro/dist or out/caimito/dist
-          IMAGE=$(find out/ -name "Image.lz4" | head -n 1)
-          
-          if [ -z "$IMAGE" ]; then
-            echo "Image not found in 'out/', checking root 'dist/'..."
-            IMAGE=$(find dist/ -name "Image.lz4" | head -n 1)
-          fi
-          
-          if [ -z "$IMAGE" ]; then
-            echo "Error: Image.lz4 could not be located. Build failed."
-            exit 1
-          fi
-          
-          cp "$IMAGE" AnyKernel3/
-          
-          # Set device codename to 'komodo' (Pixel 9 Pro XL)
-          sed -i 's/device.name1=.*/device.name1=komodo/' AnyKernel3/anykernel.sh
-          
-          cd AnyKernel3 && zip -r9 ../Sultan-SukiSU-Komodo.zip *
+        # 4. Compile
+        # Adjust -j$(nproc) to use available CPU cores
+        make -j$(nproc) Image.lz4
 
-      - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Sultan-SukiSU-Kernel-Zip
-          path: Sultan-SukiSU-Komodo.zip
+    - name: Upload Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: Image.lz4
+        path: kernel/arch/arm64/boot/Image.lz4
