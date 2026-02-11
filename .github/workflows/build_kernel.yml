@@ -66,13 +66,11 @@ jobs:
             gnupg \
             gperf \
             imagemagick \
-            lib32ncurses5-dev \
             lib32readline-dev \
             lib32z1-dev \
             liblz4-tool \
-            libncurses5 \
-            libncurses5-dev \
-            libsdl1.2-dev \
+            libncurses-dev \
+            libncurses6 \
             libssl-dev \
             libxml2 \
             libxml2-utils \
@@ -88,7 +86,9 @@ jobs:
             python-is-python3 \
             libelf-dev \
             kmod \
-            cpio
+            cpio \
+            wget \
+            ca-certificates
       
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
