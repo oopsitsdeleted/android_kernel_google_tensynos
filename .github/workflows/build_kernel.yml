@@ -19,7 +19,7 @@ jobs:
 
       - name: Integrate SukiSU-Ultra
         run: |
-          # The SukiSU setup script runs in the root directory to modify the root Makefile
+          # SukiSU setup script modifies Makefile and arch/ in the root
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
           
           # Target the specific defconfig inside the device directory
@@ -36,10 +36,13 @@ jobs:
 
       - name: Build Kernel (ZumaPro)
         run: |
-          # Use the script at the specified path
+          # Change permissions
           chmod +x google-devices/zumapro/build_zumapro.sh
           
-          # Execute the build. This script internally calls tools/bazel
+          # FIX: We run the script from the ROOT directory. 
+          # The script calls 'tools/bazel', which is located at the root.
+          # By running it as ./google-devices/zumapro/build_zumapro.sh, 
+          # the current directory stays at root, so 'tools/bazel' will be found.
           ./google-devices/zumapro/build_zumapro.sh
 
       - name: Prepare AnyKernel3
@@ -47,17 +50,17 @@ jobs:
           git clone https://github.com/osm0sis/AnyKernel3.git
           rm -rf AnyKernel3/.git* AnyKernel3/README.md
           
-          # Find the compiled Image.lz4 artifact produced by the build process
+          # Bazel usually outputs to a 'dist' directory or 'out'
           IMAGE=$(find . -name "Image.lz4" | head -n 1)
           
           if [ -z "$IMAGE" ]; then
-            echo "Error: Image.lz4 not found. Verify build success."
+            echo "Error: Image.lz4 not found."
             exit 1
           fi
           
           cp "$IMAGE" AnyKernel3/
           
-          # Configure AnyKernel3 for the Pixel 9 Pro XL (Komodo)
+          # Device name for Pixel 9 Pro XL
           sed -i 's/device.name1=.*/device.name1=komodo/' AnyKernel3/anykernel.sh
           
           cd AnyKernel3 && zip -r9 ../Sultan-SukiSU-Komodo.zip *
