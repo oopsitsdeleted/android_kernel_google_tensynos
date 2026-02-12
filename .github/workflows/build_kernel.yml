@@ -30,14 +30,17 @@ jobs:
           rm clang.tar.gz
           # Export path for standard scripts
           echo "$(pwd)/prebuilts/clang/host/linux-x86/clang-r510928/bin" >> $GITHUB_PATH
-
-      - name: Install Bazel (Kleaf requirement)
+          
+      - name: Install Bazel (Bazelisk)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y binaryen
-          # Kleaf usually expects 'bazel' to be bazelisk or a specific version
-          curl -Lo /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
-          chmod +x /usr/local/bin/bazel
+          # Download Bazelisk
+          curl -Lo bazelisk https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          chmod +x bazelisk
+          # Use sudo to move it to a system path
+          sudo mv bazelisk /usr/local/bin/bazel
+          
+          # Verify installation
+          bazel --version
 
       - name: Build Caimito (Pixel 9 Pro XL)
         run: |
