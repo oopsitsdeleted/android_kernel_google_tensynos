@@ -1,6 +1,11 @@
-name: Build Pixel 9 Pro XL Kernel
+name: Build Sultan Pixel 9 Pro XL
 on:
   workflow_dispatch:
+
+# This ensures all 'run' commands start inside your kernel folder
+defaults:
+  run:
+    working-directory: android_kernel_google_tensynos-16.0.0-sultan
 
 jobs:
   build:
@@ -12,23 +17,19 @@ jobs:
           root-reserve-mb: 2048
           remove-dotnet: 'true'
           remove-android: 'true'
-          remove-haskell: 'true'
 
       - name: Checkout Source
         uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-          fetch-depth: 1
 
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
+          # Use libncurses-dev as libncurses5 is deprecated in Ubuntu 24.04
           sudo apt-get install -y bc bison build-essential flex git python3 \
           libssl-dev libelf-dev libxml2-utils zip curl lz4 libncurses-dev
 
-      - name: Setup Clang r510928
+      - name: Download Clang r510928
         run: |
-          # Create path expected by Bazel toolchain resolution
           mkdir -p prebuilts/clang/host/linux-x86/clang-r510928
           curl -Lo clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-14.0.0_r33/clang-r510928.tar.gz
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r510928
@@ -36,26 +37,24 @@ jobs:
 
       - name: Setup Bazel Wrapper
         run: |
-          # Ensure tools/bazel exists for the build scripts to call
           mkdir -p tools
-          # Link to the kleaf bazel wrapper in the source tree
+          # Link the Kleaf bazel script to the tools directory
           ln -sf ../build/kernel/kleaf/bazel.sh tools/bazel
           chmod +x build/kernel/kleaf/bazel.sh
 
       - name: Build Caimito (Pixel 9 Pro XL)
         run: |
-          # Navigate to the specific device directory you identified
+          # Per your directory layout, the script is in google-devices/caimito/
           cd google-devices/caimito
           chmod +x build_caimito.sh
-          # Execute with thin LTO to save RAM on the GitHub runner
+          # Run with thin LTO to ensure the 7GB RAM limit isn't hit
           ./build_caimito.sh --lto=thin
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Pixel-9-Pro-XL-Kernel
+          name: Sultan-Pixel9ProXL-Kernel
+          # Note: 'out' is generated at the root of the kernel tree
           path: |
-            out/caimito/dist/boot.img
-            out/caimito/dist/vendor_kernel_boot.img
-            out/caimito/dist/dtbo.img
-            out/caimito/dist/*.ko
+            android_kernel_google_tensynos-16.0.0-sultan/out/caimito/dist/boot.img
+            android_kernel_google_tensynos-16.0.0-sultan/out/caimito/dist/dtbo.img
