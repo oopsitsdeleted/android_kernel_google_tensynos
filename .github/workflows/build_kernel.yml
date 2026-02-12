@@ -10,40 +10,52 @@ jobs:
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 2048
-          temp-reserve-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
 
-      - name: Checkout Kernel Source
+      - name: Checkout Source
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: 1
 
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex git python3 \
+          libssl-dev libelf-dev libxml2-utils zip curl lz4 libncurses5
+
       - name: Setup Clang r510928
         run: |
+          # Create path expected by Bazel toolchain resolution
           mkdir -p prebuilts/clang/host/linux-x86/clang-r510928
-          # Download the specific Clang version from Android Gitiles
           curl -Lo clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-14.0.0_r33/clang-r510928.tar.gz
           tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r510928
           rm clang.tar.gz
-          # Export path for standard scripts
-          echo "$(pwd)/prebuilts/clang/host/linux-x86/clang-r510928/bin" >> $GITHUB_PATH
-          
-      - name: Install Bazel (Bazelisk)
+
+      - name: Setup Bazel Wrapper
         run: |
-          # Download Bazelisk
-          curl -Lo bazelisk https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
-          chmod +x bazelisk
-          # Use sudo to move it to a system path
-          sudo mv bazelisk /usr/local/bin/bazel
-          
-          # Verify installation
-          bazel --version
+          # Ensure tools/bazel exists for the build scripts to call
+          mkdir -p tools
+          # Link to the kleaf bazel wrapper in the source tree
+          ln -sf ../build/kernel/kleaf/bazel.sh tools/bazel
+          chmod +x build/kernel/kleaf/bazel.sh
 
       - name: Build Caimito (Pixel 9 Pro XL)
         run: |
-          # Use the script from your uploaded files
-          # We pass the Clang path via Bazel flag if the workspace doesn't auto-detect
-          ./build_caimito.sh --clang_version=r510928
+          # Navigate to the specific device directory you identified
+          cd google-devices/caimito
+          chmod +x build_caimito.sh
+          # Execute with thin LTO to save RAM on the GitHub runner
+          ./build_caimito.sh --lto=thin
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixel-9-Pro-XL-Kernel
+          path: |
+            out/caimito/dist/boot.img
+            out/caimito/dist/vendor_kernel_boot.img
+            out/caimito/dist/dtbo.img
+            out/caimito/dist/*.ko
