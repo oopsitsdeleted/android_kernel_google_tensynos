@@ -1,7 +1,6 @@
 name: Build Pixel 9 Pro XL Kernel
-
 on:
-  workflow_dispatch: # Allows manual trigger
+  workflow_dispatch:
 
 jobs:
   build:
@@ -11,7 +10,7 @@ jobs:
         uses: easimon/maximize-build-space@master
         with:
           root-reserve-mb: 2048
-          swap-size-mb: 1024
+          temp-reserve-mb: 1024
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -19,47 +18,29 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          path: kernel
+          submodules: 'recursive'
           fetch-depth: 1
 
-      - name: Install Dependencies
+      - name: Setup Clang r510928
+        run: |
+          mkdir -p prebuilts/clang/host/linux-x86/clang-r510928
+          # Download the specific Clang version from Android Gitiles
+          curl -Lo clang.tar.gz https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-14.0.0_r33/clang-r510928.tar.gz
+          tar -xzf clang.tar.gz -C prebuilts/clang/host/linux-x86/clang-r510928
+          rm clang.tar.gz
+          # Export path for standard scripts
+          echo "$(pwd)/prebuilts/clang/host/linux-x86/clang-r510928/bin" >> $GITHUB_PATH
+
+      - name: Install Bazel (Kleaf requirement)
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex git python3 \
-          libssl-dev libelf-dev libxml2-utils zip curl lz4
+          sudo apt-get install -y binaryen
+          # Kleaf usually expects 'bazel' to be bazelisk or a specific version
+          curl -Lo /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          chmod +x /usr/local/bin/bazel
 
-      - name: Setup Build Environment (Fake Kleaf)
+      - name: Build Caimito (Pixel 9 Pro XL)
         run: |
-          cd kernel
-          # Create the missing tools/bazel link we discussed
-          mkdir -p tools
-          # Since we aren't doing a full repo sync, we point to a custom toolchain
-          # This is a simplified wrapper for Sultan's specific tree
-          echo '#!/bin/bash' > tools/bazel
-          echo 'exec build/kernel/kleaf/bazel.sh "$@"' >> tools/bazel
-          chmod +x tools/bazel
-
-      - name: Download Toolchains
-        run: |
-          # You need the Android Clang toolchain. 
-          # Sultan's tree usually expects it in a specific relative path.
-          mkdir -p prebuilts/clang/host/linux-x86
-          # Example: Downloading a compatible Clang (r487747 is common for Tensor G4)
-          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r487747c.tar.gz
-          tar -xzf clang-r487747c.tar.gz -C prebuilts/clang/host/linux-x86/clang-r487747c
-
-      - name: Build Kernel
-        run: |
-          cd kernel
-          chmod +x build_caimito.sh
-          # --lto=thin is essential for GitHub Actions to avoid OOM (Out of Memory)
-          ./build_caimito.sh --lto=thin
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Pixel-9-Pro-XL-Kernel
-          path: |
-            kernel/out/caimito/dist/boot.img
-            kernel/out/caimito/dist/vendor_kernel_boot.img
-            kernel/out/caimito/dist/dtbo.img
+          # Use the script from your uploaded files
+          # We pass the Clang path via Bazel flag if the workspace doesn't auto-detect
+          ./build_caimito.sh --clang_version=r510928
